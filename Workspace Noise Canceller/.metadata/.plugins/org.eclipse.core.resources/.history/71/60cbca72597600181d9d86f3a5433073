@@ -1,0 +1,135 @@
+/*
+===============================================================================
+ Name        : Noise_Canceller.c
+ Author      : $(author)
+ Version     :
+ Copyright   : $(copyright)
+ Description : main definition
+===============================================================================
+*/
+
+#if defined (__USE_LPCOPEN)
+#if defined(NO_BOARD_LIB)
+#include "chip.h"
+#else
+#include "board.h"
+#endif
+#endif
+
+#include <cr_section_macros.h>
+
+
+#define DAC_TIMEOUT 0x3FF
+#define order 8
+
+static ADC_CLOCK_SETUP_T ADCSetup;
+
+uint32_t tmp;
+int16_t dats1; 			// Muestra de la señal deseada mas ruido
+int16_t dats2;  		// Muetra de ruido de referencia
+float k[order] = {0};
+float buffern[order] = {0};
+
+float LMS(int16_t dats,int16_t datn,float *k,float *buffern,float mu){
+
+
+	float dats_;
+	float err;
+	uint8_t i;
+
+	buffern[0] = datn;
+
+	for (i = order-1; i >= 1; i--){
+		buffern[i] = buffern[i-1];
+	}
+
+	for (i = 0; i < order; i++){
+		dats_ += k[i]*buffern[i];
+	}
+
+	err = dats - dats_;
+
+	for (i = 0; i < order; i++){
+		k[i] += mu*err*buffern[i];
+	}
+
+	return err;
+}
+
+void Pins_Config(){
+	/*Config for AD0CH0 and AD0CH1*/
+	Chip_IOCON_PinMux(LPC_IOCON,0, 23, IOCON_MODE_PULLDOWN, IOCON_FUNC1);
+	Chip_IOCON_PinMux(LPC_IOCON,0, 24, IOCON_MODE_PULLDOWN, IOCON_FUNC1);
+
+	/*Config for DAC*/
+	Chip_IOCON_PinMux(LPC_IOCON,0, 26, IOCON_MODE_PULLDOWN, IOCON_FUNC2);
+}
+
+void Interrupts_Config(){
+	NVIC_EnableIRQ(ADC_IRQn);
+}
+
+void DAC_Config(){
+    uint32_t dacClk;
+
+	Chip_DAC_Init(LPC_DAC);
+	/* Setup DAC timeout for polled and DMA modes to 0x3FF */
+	/* 175x/6x devices have a DAC divider, set it to 1 */
+	Chip_Clock_SetPCLKDiv(SYSCTL_PCLK_DAC, SYSCTL_CLKDIV_1);
+
+	Chip_DAC_SetDMATimeOut(LPC_DAC, DAC_TIMEOUT);
+
+	/* Compute and show estimated DAC request time */
+	dacClk = Chip_Clock_GetPeripheralClockRate(SYSCTL_PCLK_DAC);
+
+	/* Enable count and DMA support */
+	Chip_DAC_ConfigDAConverterControl(LPC_DAC, DAC_CNT_ENA);
+}
+
+void ADC_Config(){
+	Chip_ADC_Init(LPC_ADC, &ADCSetup);
+
+	//Chip_ADC_Int_SetChannelCmd(_LPC_ADC_ID, ADC_CH0, ENABLE);
+	Chip_ADC_Int_SetChannelCmd(LPC_ADC, ADC_CH1, ENABLE);
+
+	Chip_ADC_EnableChannel(LPC_ADC, ADC_CH0, ENABLE);
+	Chip_ADC_EnableChannel(LPC_ADC, ADC_CH1, ENABLE);
+}
+
+void ADC_Enable(void){
+	Chip_ADC_SetBurstCmd(LPC_ADC, ENABLE);
+}
+
+void ADC_IRQHandler(void)
+{
+	dats1 = ADC_DR_RESULT(LPC_ADC->DR[0]);
+	dats2 = ADC_DR_RESULT(LPC_ADC->DR[1]);
+	tmp = LMS(dats1,dats2,&(k[0]),&(buffern[0]),0.0000001);
+	Chip_DAC_UpdateValue(LPC_DAC, tmp);
+
+}
+
+int main(void) {
+
+#if defined (__USE_LPCOPEN)
+    // Read clock settings and update SystemCoreClock variable
+    SystemCoreClockUpdate();
+#if !defined(NO_BOARD_LIB)
+    // Set up and initialize all required blocks and
+    // functions related to the board hardware
+    Board_Init();
+    // Set the LED to the state of "On"
+    Board_LED_Set(0, true);
+#endif
+#endif
+
+    Pins_Config();
+    DAC_Config();
+    ADC_Config();
+    ADC_Enable();
+    Interrupts_Config();
+    while(1) {
+
+    }
+    return 0 ;
+}
